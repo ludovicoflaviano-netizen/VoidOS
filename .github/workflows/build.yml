@@ -1,36 +1,32 @@
 name: Build VoidOS
-
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "feature/**"]
   pull_request:
-
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential gcc-multilib binutils grub-pc-bin grub-common xorriso mtools qemu-system-x86
-
+          sudo apt-get install -y build-essential gcc-multilib binutils grub-pc-bin grub-common xorriso mtools qemu-system-x86 mingw-w64
       - name: Build ISO
         run: make
-
-      - name: Verify ISO exists
+      - name: Verify ISO
         run: test -s build/voidos.iso
-
-      - name: Verify kernel is Multiboot
+      - name: Verify Multiboot
+        run: grub-file --is-x86-multiboot build/kernel.bin
+      - name: Build Windows launcher
         run: |
-          grub-file --is-x86-multiboot build/kernel.bin
-          echo "Multiboot kernel check passed."
-
-      - name: Upload ISO
+          x86_64-w64-mingw32-gcc tools/voidos-launcher.c -O2 -s -mwindows -o build/voidos-launcher.exe
+          test -s build/voidos-launcher.exe
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: voidos-iso
-          path: build/voidos.iso
+          name: voidos-desktop
+          path: |
+            build/voidos.iso
+            build/voidos-launcher.exe

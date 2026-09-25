@@ -1,118 +1,31 @@
 #include <stdint.h>
 #include <stddef.h>
-
-#define VGA_WIDTH 80
-#define VGA_HEIGHT 25
-#define VGA_MEMORY ((volatile uint16_t*)0xB8000)
-
-static size_t row, column;
-static uint8_t color = 0x07;
-
-static inline void outb(uint16_t port, uint8_t value) {
-    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
-}
-static inline uint8_t inb(uint16_t port) {
-    uint8_t value;
-    __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
-}
-static void clear(void) {
-    for (size_t y=0; y<VGA_HEIGHT; y++)
-        for (size_t x=0; x<VGA_WIDTH; x++)
-            VGA_MEMORY[y*VGA_WIDTH+x] = ((uint16_t)color << 8) | ' ';
-    row=0; column=0;
-}
-static void scroll(void) {
-    if (row < VGA_HEIGHT) return;
-    for (size_t y=1; y<VGA_HEIGHT; y++)
-        for (size_t x=0; x<VGA_WIDTH; x++)
-            VGA_MEMORY[(y-1)*VGA_WIDTH+x] = VGA_MEMORY[y*VGA_WIDTH+x];
-    for (size_t x=0; x<VGA_WIDTH; x++)
-        VGA_MEMORY[(VGA_HEIGHT-1)*VGA_WIDTH+x] = ((uint16_t)color << 8) | ' ';
-    row=VGA_HEIGHT-1;
-}
-static void putc(char c) {
-    if (c=='\n') { column=0; row++; scroll(); return; }
-    if (c=='\b') {
-        if (column) { column--; VGA_MEMORY[row*VGA_WIDTH+column]=((uint16_t)color<<8)|' '; }
-        return;
-    }
-    VGA_MEMORY[row*VGA_WIDTH+column]=((uint16_t)color<<8)|(uint8_t)c;
-    if (++column>=VGA_WIDTH) { column=0; row++; scroll(); }
-}
-static void print(const char* s) { while (*s) putc(*s++); }
-
-static int same(const char* a, const char* b) {
-    while (*a && *a==*b) { a++; b++; }
-    return *a == *b;
-}
-static int prefix(const char* s, const char* p) {
-    while (*p) { if (*s++ != *p++) return 0; }
-    return 1;
-}
-static char keyboard_getchar(void) {
-    static const char map[] =
-        "\0\0331234567890-=" "\b"
-        "\tqwertyuiop[]\n"
-        "\0asdfghjkl;'\0"
-        "\\\zxcvbnm,./\0"
-        "*\0 ";
-    for (;;) {
-        if (!(inb(0x64)&1)) continue;
-        uint8_t sc=inb(0x60);
-        if (sc&0x80 || sc>=sizeof(map)-1) continue;
-        if (map[sc]) return map[sc];
-    }
-}
-static void reboot(void) {
-    while (inb(0x64)&2) {}
-    outb(0x64,0xFE);
-    for (;;) __asm__ volatile ("hlt");
-}
-static void halt(void) {
-    print("\nSystem halted.\n");
-    for (;;) __asm__ volatile ("cli; hlt");
-}
-static void shell(void) {
-    char input[128];
-    size_t n=0;
-    print("VoidOS shell. Type 'help' for commands.\n");
-    print("void> ");
-    for (;;) {
-        char c=keyboard_getchar();
-        if (c=='\n') {
-            input[n]='\0';
-            if (!n) { print("void> "); continue; }
-            if (same(input,"help")) {
-                print("Commands:\n  help       Show this list\n  about      Show system information\n  clear      Clear the screen\n  echo TEXT  Print TEXT\n  reboot     Restart the machine\n  halt       Stop the CPU\n");
-            } else if (same(input,"about")) {
-                print("VoidOS 0.1\nA small operating system built from scratch.\nKernel: C + x86 assembly\nBoot: GRUB Multiboot\n");
-            } else if (same(input,"clear")) {
-                clear();
-            } else if (prefix(input,"echo ")) {
-                print(input+5); putc('\n');
-            } else if (same(input,"reboot")) {
-                reboot();
-            } else if (same(input,"halt")) {
-                halt();
-            } else {
-                print("Unknown command. Type 'help'.\n");
-            }
-            n=0; print("void> ");
-        } else if (c=='\b') {
-            if (n) { n--; putc('\b'); }
-        } else if (c>=32 && c<=126 && n<sizeof(input)-1) {
-            input[n++]=c; putc(c);
-        }
-    }
-}
-void kernel_main(uint32_t magic, uint32_t multiboot_info) {
-    (void)multiboot_info;
-    clear(); color=0x0F;
-    print("========================================\n");
-    print("              VOIDOS 0.1               \n");
-    print("========================================\n");
-    if (magic != 0x2BADB002) { print("Boot error: invalid Multiboot magic.\n"); halt(); }
-    print("Kernel initialized. Keyboard ready.\n\n");
-    shell();
-}
+#define MULTIBOOT_MAGIC 0x2BADB002u
+typedef struct __attribute__((packed)){uint32_t flags,mem_lower,mem_upper,boot_device,cmdline,mods_count,mods_addr,syms[4],mmap_length,mmap_addr,drives_length,drives_addr,config_table,boot_loader_name,apm_table,vbe_control_info,vbe_mode_info;uint16_t vbe_mode,vbe_interface_seg,vbe_interface_off,vbe_interface_len;uint64_t framebuffer_addr;uint32_t framebuffer_pitch,framebuffer_width,framebuffer_height;uint8_t framebuffer_bpp,framebuffer_type;} multiboot_info_t;
+static uint32_t *fb,pitch,sw,sh;static int mx,my,left_button,start_menu;static int active=2,dragging=-1,dragx,dragy;
+typedef struct{int open,x,y,w,h,kind;const char*title;}Window;static Window win[3]={{0,120,100,560,380,1,"TERMINAL"},{0,180,130,520,350,2,"FILE EXPLORER"},{1,230,160,440,280,3,"ABOUT VOIDOS"}};
+static char linebuf[80],statusbuf[80]="TYPE HELP FOR COMMANDS";static size_t linelen;
+static const uint8_t letters[182]={14,17,17,31,17,17,17,30,17,17,30,17,17,30,15,16,16,16,16,16,15,30,17,17,17,17,17,30,31,16,16,30,16,16,31,31,16,16,30,16,16,16,15,16,16,23,17,17,15,17,17,17,31,17,17,17,31,4,4,4,4,4,31,7,2,2,2,18,18,12,17,18,20,24,20,18,17,16,16,16,16,16,16,31,17,27,21,21,17,17,17,17,25,21,19,17,17,17,14,17,17,17,17,17,14,30,17,17,30,16,16,16,14,17,17,17,21,18,13,30,17,17,30,20,18,17,15,16,16,14,1,1,30,31,4,4,4,4,4,4,17,17,17,17,17,17,14,17,17,17,17,17,10,4,17,17,17,21,21,27,17,17,17,10,4,10,17,17,17,17,10,4,4,4,31,1,2,4,8,16,31};static const uint8_t digits[70]={14,17,19,21,25,17,14,4,12,4,4,4,4,14,14,17,1,2,4,8,31,30,1,1,14,1,1,30,2,6,10,18,31,2,2,31,16,16,30,1,1,30,14,16,16,30,17,17,14,31,1,2,4,8,8,8,14,17,17,14,17,17,14,14,17,17,15,1,1,14};
+static inline void outb(uint16_t p,uint8_t v){__asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p));}static inline uint8_t inb(uint16_t p){uint8_t v;__asm__ volatile("inb %1,%0":"=a"(v):"Nd"(p));return v;}
+static void put(int x,int y,uint32_t c){if(x>=0&&y>=0&&(uint32_t)x<sw&&(uint32_t)y<sh)fb[(uint32_t)y*pitch+x]=c;}
+static void rect(int x,int y,int w,int h,uint32_t c){if(x<0){w+=x;x=0;}if(y<0){h+=y;y=0;}if(x+w>(int)sw)w=sw-x;if(y+h>(int)sh)h=sh-y;if(w<=0||h<=0)return;for(int yy=0;yy<h;yy++)for(int xx=0;xx<w;xx++)fb[(uint32_t)(y+yy)*pitch+x+xx]=c;}
+static uint8_t row_for(char c,int r){if(c>='A'&&c<='Z')return letters[(c-'A')*7+r];if(c>='0'&&c<='9')return digits[(c-'0')*7+r];if(c=='-')return r==3?31:0;if(c==':')return(r==1||r==4)?4:0;if(c=='.')return r>=5?3:0;if(c=='!')return 4;if(c=='/')return(uint8_t)(1u<<(r<4?r:7-r));return 0;}
+static void glyph(int x,int y,char c,uint32_t col,int s){if(c>='a'&&c<='z')c=(char)(c-'a'+'A');for(int r=0;r<7;r++)for(int q=0;q<5;q++)if(row_for(c,r)&(1u<<(4-q)))rect(x+q*s,y+r*s,s,s,col);}
+static void text(int x,int y,const char*s,uint32_t c,int scale){int cx=x;while(*s){if(*s=='\n'){y+=8*scale;cx=x;}else{glyph(cx,y,*s,c,scale);cx+=6*scale;}s++;}}
+static int inside(int x,int y,int w,int h,int px,int py){return px>=x&&py>=y&&px<x+w&&py<y+h;}
+static void wait_clear(void){for(int i=0;i<100000;i++)if(!(inb(0x64)&2))return;}
+static void mouse_cmd(uint8_t c){wait_clear();outb(0x64,0xD4);wait_clear();outb(0x60,c);for(int i=0;i<100000;i++)if(inb(0x64)&1){(void)inb(0x60);break;}}
+static void mouse_init(void){wait_clear();outb(0x64,0xA8);wait_clear();outb(0x64,0x20);for(int i=0;i<100000;i++)if(inb(0x64)&1)break;uint8_t s=inb(0x60)|2;wait_clear();outb(0x64,0x60);wait_clear();outb(0x60,s);mouse_cmd(0xF6);mouse_cmd(0xF4);}
+static void mouse_poll(void){static uint8_t p[3];static int n;uint8_t v;while(inb(0x64)&1){v=inb(0x60);if(n==0&&!(v&8))continue;p[n++]=v;if(n==3){mx+=(int8_t)p[1];my-=(int8_t)p[2];if(mx<0)mx=0;if(my<0)my=0;if(mx>=(int)sw)mx=sw-1;if(my>=(int)sh)my=sh-1;left_button=p[0]&1;n=0;}}}
+static const char keymap[128]={0,0,'1','2','3','4','5','6','7','8','9','0','-','=',8,0,'q','w','e','r','t','y','u','i','o','p','[',']','\n',0,'a','s','d','f','g','h','j','k','l',';','\'','`',0,'\\','z','x','c','v','b','n','m',',','.','/',0,'*',0,' ',0};
+static int key_get(char*c){if(!(inb(0x64)&1))return 0;uint8_t sc=inb(0x60);if(sc&0x80||sc>=128||!keymap[sc])return 0;*c=keymap[sc];return 1;}
+static void set_status(const char*s){size_t i=0;while(i<sizeof(statusbuf)-1&&s[i]){statusbuf[i]=s[i];i++;}statusbuf[i]=0;}
+static int command(const char*s){size_t i=0;while(s[i]&&linebuf[i]&&s[i]==linebuf[i])i++;return s[i]==0&&linebuf[i]==0;}
+static void terminal_key(char c){if(active!=0||!win[0].open)return;if(c=='\n'){if(!linelen)return;linebuf[linelen]=0;if(command("help"))set_status("COMMANDS: HELP ABOUT CLEAR REBOOT HALT");else if(command("about"))set_status("VOIDOS DESKTOP 0.2");else if(command("clear"))set_status("TERMINAL BUFFER CLEARED");else if(command("reboot")){while(inb(0x64)&2){}outb(0x64,0xFE);}else if(command("halt"))for(;;)__asm__ volatile("cli;hlt");else set_status("UNKNOWN COMMAND - TYPE HELP");linelen=0;linebuf[0]=0;}else if(c==8){if(linelen)linebuf[--linelen]=0;}else if(c>=32&&c<=126&&linelen<sizeof(linebuf)-1){linebuf[linelen++]=c;linebuf[linelen]=0;}}
+static void icon(int x,int y,uint32_t c,const char*name){rect(x,y,48,42,0x00273543);rect(x+7,y+6,34,26,c);rect(x+13,y+11,22,14,0x00F5F7FA);text(x,y+48,name,0x00FFFFFF,1);}
+static void window(Window*w){if(!w->open)return;rect(w->x+7,w->y+8,w->w,w->h,0x00101922);rect(w->x,w->y,w->w,w->h,0x00E9EDF2);rect(w->x,w->y,w->w,32,active>=0&&w==&win[active]?0x002B5D91:0x004A5563);text(w->x+10,w->y+9,w->title,0x00FFFFFF,1);rect(w->x+w->w-25,w->y+7,17,17,0x00C94B4B);text(w->x+w->w-21,w->y+9,"X",0x00FFFFFF,1);if(w->kind==1){rect(w->x+12,w->y+44,w->w-24,w->h-56,0x00151A20);text(w->x+22,w->y+58,"VOIDOS TERMINAL",0x007BE3FF,1);text(w->x+22,w->y+80,"ROOT@VOIDOS:~$",0x0088FF88,1);text(w->x+125,w->y+80,linebuf,0x00FFFFFF,1);text(w->x+22,w->y+105,statusbuf,0x00D5DCE3,1);}else if(w->kind==2){text(w->x+18,w->y+48,"THIS PC",0x001B2733,1);rect(w->x+20,w->y+75,90,70,0x00DDE8F2);rect(w->x+130,w->y+75,90,70,0x00DDE8F2);rect(w->x+240,w->y+75,90,70,0x00DDE8F2);text(w->x+38,w->y+103,"HOME",0x001B2733,1);text(w->x+148,w->y+103,"SYSTEM",0x001B2733,1);text(w->x+260,w->y+103,"APPS",0x001B2733,1);text(w->x+18,w->y+185,"FILESYSTEM READY",0x004C5967,1);}else{text(w->x+20,w->y+50,"VOIDOS DESKTOP",0x001B2733,2);text(w->x+20,w->y+82,"LIGHTWEIGHT CUSTOM OS",0x003A4652,1);text(w->x+20,w->y+105,"FRAMEBUFFER GUI AND PS2 MOUSE",0x003A4652,1);text(w->x+20,w->y+128,"LINUX-LIKE FOUNDATION",0x003A4652,1);}}
+static void cursor(void){static const uint8_t m[12]={128,192,224,240,248,252,254,240,48,24,8,0};for(int y=0;y<12;y++)for(int x=0;x<8;x++)if(m[y]&(128>>x))put(mx+x,my+y,0x00FFFFFF);}
+static void draw(void){rect(0,0,sw,sh,0x002B6B8F);for(int y=0;y<(int)sh-36;y+=28)rect(0,y,sw,1,0x00317698);icon(30,40,0x003A91D8,"COMPUTER");icon(30,120,0x00D8A42B,"FILES");icon(30,200,0x005A9BD5,"TERMINAL");for(int i=0;i<3;i++)window(&win[i]);int ty=sh-36;rect(0,ty,sw,36,0x00131B24);rect(8,ty+5,86,26,start_menu?0x003A91D8:0x0027333F);text(28,ty+13,"VOID",0x00FFFFFF,1);if(active>=0&&win[active].open){rect(108,ty+5,190,26,0x0027333F);text(120,ty+13,win[active].title,0x00FFFFFF,1);}text(sw-100,ty+13,"VOIDOS",0x00A9B6C4,1);if(start_menu){int y=ty-250;rect(8,y,360,250,0x00F1F4F7);rect(8,y,360,44,0x002B5D91);text(28,y+14,"VOIDOS",0x00FFFFFF,1);text(28,y+66,"TERMINAL",0x00212B36,1);text(28,y+108,"FILE EXPLORER",0x00212B36,1);text(28,y+150,"ABOUT VOIDOS",0x00212B36,1);text(28,y+200,"POWER",0x00C94B4B,1);}cursor();}
+static void click(void){static int old;int press=left_button&&!old;old=left_button;if(!press)return;int ty=sh-36;if(inside(8,ty+5,86,26,mx,my)){start_menu=!start_menu;return;}if(start_menu){int y=ty-250;if(inside(8,y+44,360,44,mx,my)){win[0].open=1;active=0;start_menu=0;return;}if(inside(8,y+88,360,44,mx,my)){win[1].open=1;active=1;start_menu=0;return;}if(inside(8,y+132,360,44,mx,my)){win[2].open=1;active=2;start_menu=0;return;}if(inside(8,y+176,360,50,mx,my))for(;;)__asm__ volatile("cli;hlt");start_menu=0;return;}if(inside(30,40,72,72,mx,my)||inside(30,120,72,72,mx,my)){win[1].open=1;active=1;return;}if(inside(30,200,72,72,mx,my)){win[0].open=1;active=0;return;}for(int i=0;i<3;i++)if(win[i].open){if(inside(win[i].x+win[i].w-25,win[i].y+7,17,17,mx,my)){win[i].open=0;if(active==i)active=-1;return;}if(inside(win[i].x,win[i].y,win[i].w,32,mx,my)){active=i;dragging=i;dragx=mx-win[i].x;dragy=my-win[i].y;return;}}}
+static void drag(void){if(dragging<0)return;if(!left_button){dragging=-1;return;}Window*w=&win[dragging];w->x=mx-dragx;w->y=my-dragy;if(w->x<0)w->x=0;if(w->y<0)w->y=0;if(w->x+w->w>(int)sw)w->x=sw-w->w;if(w->y+w->h>(int)sh-36)w->y=sh-36-w->h;}
+void kernel_main(uint32_t magic,uint32_t mbi_addr){multiboot_info_t*mb=(multiboot_info_t*)(uintptr_t)mbi_addr;if(magic!=MULTIBOOT_MAGIC||!(mb->flags&(1u<<12))||mb->framebuffer_type!=1||mb->framebuffer_bpp!=32){volatile uint16_t*v=(volatile uint16_t*)0xB8000;const char*s="VOIDOS: FRAMEBUFFER UNAVAILABLE";for(size_t i=0;s[i];i++)v[i]=(uint16_t)(0x0F00|s[i]);for(;;)__asm__ volatile("cli;hlt");}fb=(uint32_t*)(uintptr_t)(uint32_t)mb->framebuffer_addr;pitch=mb->framebuffer_pitch/4;sw=mb->framebuffer_width;sh=mb->framebuffer_height;mx=sw/2;my=sh/2;mouse_init();for(;;){mouse_poll();click();drag();char c;if(key_get(&c)){if(c=='t'&&!win[0].open){win[0].open=1;active=0;}else if(c=='f'&&!win[1].open){win[1].open=1;active=1;}else terminal_key(c);}draw();for(volatile int d=0;d<30000;d++)__asm__ volatile("pause");}}
