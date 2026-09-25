@@ -1,22 +1,36 @@
 name: Build VoidOS
+
 on:
   push:
     branches: ["main"]
   pull_request:
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Install dependencies
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential gcc-multilib binutils grub-pc-bin grub-common xorriso qemu-system-x86
+          sudo apt-get install -y build-essential gcc-multilib binutils grub-pc-bin grub-common xorriso mtools qemu-system-x86
+
       - name: Build ISO
         run: make
-      - name: Verify ISO
+
+      - name: Verify ISO exists
         run: test -s build/voidos.iso
-      - uses: actions/upload-artifact@v4
+
+      - name: Verify kernel is Multiboot
+        run: |
+          grub-file --is-x86-multiboot build/kernel.bin
+          echo "Multiboot kernel check passed."
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
         with:
           name: voidos-iso
           path: build/voidos.iso
