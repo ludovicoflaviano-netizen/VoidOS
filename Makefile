@@ -1,7 +1,7 @@
 CC := gcc
 LD := ld
 AS := gcc
-CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -Wall -Wextra -O2
+CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -fno-builtin -fno-asynchronous-unwind-tables -Wall -Wextra -O2
 LDFLAGS := -m elf_i386 -T linker.ld -nostdlib
 BUILD := build
 ISO := $(BUILD)/voidos.iso
@@ -27,7 +27,7 @@ $(ISO): $(BUILD)/kernel.bin grub/grub.cfg
 	grub-mkrescue -o $@ $(BUILD)/iso
 
 run: $(ISO)
-	qemu-system-i386 -cdrom $(ISO)
+	qemu-system-i386 -cdrom $(ISO) -m 256
 
 clean:
 	rm -rf $(BUILD)

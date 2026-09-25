@@ -14,6 +14,8 @@ stack_top:
 .global _start
 .type _start, @function
 _start:
+    cli
+    cld
     mov $stack_top, %esp
     push %ebx
     push %eax
